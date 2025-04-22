@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LED Panel Layout Planner</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: inline-block;
+            width: 150px;
+        }
+        input {
+            width: 100px;
+        }
+        button {
+            padding: 10px 20px;
+            margin-top: 10px;
+        }
+        #output {
+            margin-top: 20px;
+        }
+        .error {
+            color: red;
+        }
+        .solution {
+            margin-bottom: 30px;
+            display: flex;
+            align-items: flex-start;
+        }
+        .solution-text {
+            flex: 1;
+            white-space: pre-wrap;
+        }
+        canvas {
+            border: 1px solid #ccc;
+            margin-left: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>LED Panel Layout Planner</h1>
+    <div class="input-group">
+        <label>Total Width:</label>
+        <input type="number" id="totalWidth" min="1" placeholder="e.g., 3840">
+        <span>pixels</span>
+    </div>
+    <div class="input-group">
+        <label>Total Height:</label>
+        <input type="number" id="totalHeight" min="1" placeholder="e.g., 2160">
+        <span>pixels</span>
+    </div>
+    <div class="input-group">
+        <label>Panel Width:</label>
+        <input type="number" id="panelWidth" min="1" placeholder="e.g., 192">
+        <span>pixels</span>
+    </div>
+    <div class="input-group">
+        <label>Panel Height:</label>
+        <input type="number" id="panelHeight" min="1" placeholder="e.g., 384">
+        <span>pixels</span>
+    </div>
+    <div class="input-group">
+        <label>Bytes per Channel:</label>
+        <input type="number" id="bytesPerChannel" min="1" value="3" placeholder="e.g., 3">
+        <span>(e.g., 3 for RGB, 4 for RGBA)</span>
+    </div>
+    <div class="input-group">
+        <label>Max Bandwidth/Chain:</label>
+        <input type="number" id="maxBandwidth" min="0.1" step="0.1" placeholder="e.g., 1">
+        <span>Gbps</span>
+    </div>
+    <div class="input-group">
+        <label>Max Bandwidth/Group:</label>
+        <input type="number" id="maxGroupBandwidth" min="0.1" step="0.1" placeholder="e.g., 10">
+        <span>Gbps</span>
+    </div>
+    <button onclick="calculateLayout()">Calculate Layout</button>
+    <div id="output"></div>
+
+    <script>
+        // Array of distinct colors for chains
+        const chainColors = [
+            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEEAD',
+            '#D4A5A5', '#9B59B6', '#3498DB', '#E74C3C', '#2ECC71',
+            '#F1C40F', '#E67E22', '#1ABC9C', '#8E44AD', '#2980B9'
+        ];
+
+        function calculateLayout() {
+            const outputDiv = document.getElementById('output');
+            outputDiv.innerHTML = '';
+
+            // Get inputs
+            const totalWidth = parseInt(document.getElementById('totalWidth').value);
+            const totalHeight = parseInt(document.getElementById('totalHeight').value);
+            const panelWidth = parseInt(document.getElementById('panelWidth').value);
+            const panelHeight = parseInt(document.getElementById('panelHeight').value);
+            const bytesPerChannel = parseInt(document.getElementById('bytesPerChannel').value);
+            const maxBandwidth = parseFloat(document.getElementById('maxBandwidth').value);
+            const maxGroupBandwidth = parseFloat(document.getElementById('maxGroupBandwidth').value);
+
+            // Validate inputs
+            if (!totalWidth || !totalHeight || !panelWidth || !panelHeight || !bytesPerChannel || !maxBandwidth || !maxGroupBandwidth) {
+                outputDiv.innerHTML = '<span class="error">Please fill in all fields with valid numbers.</span>';
+                return;
+            }
+            if (bytesPerChannel < 1) {
+                outputDiv.innerHTML = '<span class="error">Bytes per channel must be at least 1.</span>';
+                return;
+            }
+            if (maxGroupBandwidth < maxBandwidth) {
+                outputDiv.innerHTML = '<span class="error">Max bandwidth per group must be at least equal to max bandwidth per chain.</span>';
+                return;
+            }
+
+            // Calculate panel bandwidth (in bits per second)
+            const panelBandwidth = panelWidth * panelHeight * bytesPerChannel * 60 * 8; // bits per second
+            const maxBandwidthBps = maxBandwidth * 1e9; // Convert Gbps to bps
+            const maxGroupBandwidthBps = maxGroupBandwidth * 1e9; // Convert Gbps to bps
+            const maxPanelsPerChain = Math.floor(maxBandwidthBps / panelBandwidth);
+
+            if (maxPanelsPerChain < 1) {
+                outputDiv.innerHTML = '<span class="error">Bandwidth per chain too low to support even one panel.</span>';
+                return;
+            }
+
+            // Calculate minimum panels needed
+            const panelsX = Math.ceil(totalWidth / panelWidth);
+            const panelsY = Math.ceil(totalHeight / panelHeight);
+            const totalPanels = panelsX * panelsY;
+
+            // Find chain configurations
+            let solutions = [];
+            for (let chainWidth = 1; chainWidth <= panelsX; chainWidth++) {
+                for (let chainHeight = 1; chainHeight <= panelsY; chainHeight++) {
+                    const panelsPerChain = chainWidth * chainHeight;
+                    if (panelsPerChain > maxPanelsPerChain) continue;
+
+                    // Check if we can tile the layout with these chains
+                    if (panelsX % chainWidth === 0 && panelsY % chainHeight === 0) {
+                        const numChainsX = panelsX / chainWidth;
+                        const numChainsY = panelsY / chainHeight;
+                        const totalChains = numChainsX * numChainsY;
+
+                        // Calculate number of chain groups
+                        const chainBandwidth = panelsPerChain * panelBandwidth;
+                        const maxChainsPerGroup = Math.floor(maxGroupBandwidthBps / chainBandwidth);
+                        if (maxChainsPerGroup < 1) continue; // Skip if group bandwidth can't support even one chain
+
+                        // Distribute chains evenly across groups
+                        const numGroups = Math.ceil(totalChains / maxChainsPerGroup);
+                        const baseChainsPerGroup = Math.floor(totalChains / numGroups);
+                        const extraChains = totalChains % numGroups;
+                        const chainsPerGroup = Array(numGroups).fill(baseChainsPerGroup);
+                        for (let i = 0; i < extraChains; i++) {
+                            chainsPerGroup[i]++;
+                        }
+
+                        const achievedWidth = panelsX * panelWidth;
+                        const achievedHeight = panelsY * panelHeight;
+
+                        solutions.push({
+                            chainWidth,
+                            chainHeight,
+                            panelsPerChain,
+                            totalChains,
+                            numChainsX,
+                            numChainsY,
+                            achievedWidth,
+                            achievedHeight,
+                            panelsX,
+                            panelsY,
+                            numGroups,
+                            chainsPerGroup,
+                            chainBandwidth
+                        });
+                    }
+                }
+            }
+
+            // Sort solutions by number of groups (prefer fewer groups), then total chains, then panel count balance
+            solutions.sort((a, b) => {
+                if (a.numGroups !== b.numGroups) {
+                    return a.numGroups - b.numGroups;
+                }
+                if (a.totalChains !== b.totalChains) {
+                    return a.totalChains - b.totalChains;
+                }
+                return a.panelsPerChain - b.panelsPerChain;
+            });
+
+            // Display results
+            if (solutions.length === 0) {
+                outputDiv.innerHTML = '<span class="error">No valid configurations found. Try increasing bandwidth or reducing resolution.</span>';
+                return;
+            }
+
+            solutions.slice(0, 5).forEach((sol, index) => {
+                const solutionDiv = document.createElement('div');
+                solutionDiv.className = 'solution';
+
+                // Text output
+                const textDiv = document.createElement('div');
+                textDiv.className = 'solution-text';
+                let output = `Configuration ${index + 1}:\n`;
+                output += `  Total Layout: ${sol.achievedWidth}x${sol.achievedHeight} pixels (${sol.panelsX}x${sol.panelsY} panels)\n`;
+                output += `  Chains: ${sol.totalChains} (${sol.numChainsX}x${sol.numChainsY} grid)\n`;
+                output += `  Panels per Chain: ${sol.panelsPerChain} (${sol.chainWidth}x${sol.chainHeight} rectangle)\n`;
+                output += `  Bandwidth per Chain: ${(sol.chainBandwidth / 1e9).toFixed(2)} Gbps\n`;
+                output += `  Chain Groups: ${sol.numGroups}\n`;
+                sol.chainsPerGroup.forEach((chains, i) => {
+                    const groupBandwidth = chains * sol.chainBandwidth / 1e9;
+                    output += `    Group ${i + 1}: ${chains} chains, ${groupBandwidth.toFixed(2)} Gbps\n`;
+                });
+                textDiv.textContent = output;
+
+                // Canvas drawing
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+
+                // Calculate tile dimensions to match panel aspect ratio
+                const aspectRatio = panelWidth / panelHeight;
+                const baseTileWidth = 40;
+                const tileWidth = baseTileWidth;
+                const tileHeight = baseTileWidth / aspectRatio;
+
+                // Set canvas size based on number of panels and tile dimensions
+                canvas.width = sol.panelsX * tileWidth;
+                canvas.height = sol.panelsY * tileHeight;
+
+                // Draw all chains (panels)
+                let chainIndex = 0;
+                for (let cy = 0; cy < sol.numChainsY; cy++) {
+                    for (let cx = 0; cx < sol.numChainsX; cx++) {
+                        const color = chainColors[chainIndex % chainColors.length];
+                        // Draw panels in this chain
+                        for (let py = 0; py < sol.chainHeight; py++) {
+                            for (let px = 0; px < sol.chainWidth; px++) {
+                                const x = (cx * sol.chainWidth + px) * tileWidth;
+                                const y = (cy * sol.chainHeight + py) * tileHeight;
+                                ctx.fillStyle = color;
+                                ctx.fillRect(x, y, tileWidth, tileHeight);
+                                ctx.strokeStyle = 'black';
+                                ctx.lineWidth = 1;
+                                ctx.strokeRect(x, y, tileWidth, tileHeight);
+                            }
+                        }
+                        chainIndex++;
+                    }
+                }
+
+                // Draw wiring for the first chain only (cx=0, cy=0)
+                if (sol.numChainsX > 0 && sol.numChainsY > 0) {
+                    const cx = 0;
+                    const cy = 0;
+                    const chainWidth = sol.chainWidth;
+                    const chainHeight = sol.chainHeight;
+
+                    // Generate snake-like path for the first chain
+                    let path = [];
+                    let rightToLeft = false;
+                    for (let py = 0; py < chainHeight; py++) {
+                        let row = [];
+                        for (let px = 0; px < chainWidth; px++) {
+                            const x = rightToLeft ? chainWidth - 1 - px : px;
+                            row.push({ px: x, py });
+                        }
+                        path.push(...row);
+                        rightToLeft = !rightToLeft;
+                    }
+
+                    // Draw lines and arrows between consecutive panels
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = 2;
+                    for (let i = 0; i < path.length - 1; i++) {
+                        const p1 = path[i];
+                        const p2 = path[i + 1];
+
+                        // Calculate panel center coordinates
+                        const x1 = (cx * chainWidth + p1.px) * tileWidth + tileWidth / 2;
+                        const y1 = (cy * chainHeight + p1.py) * tileHeight + tileHeight / 2;
+                        const x2 = (cx * chainWidth + p2.px) * tileWidth + tileWidth / 2;
+                        const y2 = (cy * chainHeight + p2.py) * tileHeight + tileHeight / 2;
+
+                        // Draw line
+                        ctx.beginPath();
+                        ctx.moveTo(x1, y1);
+                        ctx.lineTo(x2, y2);
+                        ctx.stroke();
+
+                        // Draw arrow at midpoint
+                        const midX = (x1 + x2) / 2;
+                        const midY = (y1 + y2) / 2;
+                        const arrowSize = 5;
+                        ctx.beginPath();
+                        ctx.moveTo(midX, midY);
+                        if (x2 > x1) {
+                            // Right
+                            ctx.lineTo(midX - arrowSize, midY - arrowSize);
+                            ctx.moveTo(midX, midY);
+                            ctx.lineTo(midX - arrowSize, midY + arrowSize);
+                        } else if (x1 > x2) {
+                            // Left
+                            ctx.lineTo(midX + arrowSize, midY - arrowSize);
+                            ctx.moveTo(midX, midY);
+                            ctx.lineTo(midX + arrowSize, midY + arrowSize);
+                        } else if (y2 > y1) {
+                            // Down
+                            ctx.lineTo(midX - arrowSize, midY - arrowSize);
+                            ctx.moveTo(midX, midY);
+                            ctx.lineTo(midX + arrowSize, midY - arrowSize);
+                        }
+                        ctx.stroke();
+                    }
+                }
+
+                solutionDiv.appendChild(textDiv);
+                solutionDiv.appendChild(canvas);
+                outputDiv.appendChild(solutionDiv);
+            });
+
+            if (solutions.length > 5) {
+                const moreDiv = document.createElement('div');
+                moreDiv.textContent = `...and ${solutions.length - 5} more configurations available.`;
+                outputDiv.appendChild(moreDiv);
+            }
+        }
+    </script>
+</body>
+</html>
